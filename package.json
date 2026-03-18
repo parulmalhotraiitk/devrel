@@ -1,0 +1,37 @@
+{
+  "name": "devrel-empire",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc && cd frontend && npm install && npm run build",
+    "start": "node dist/index.js",
+    "dev": "nodemon --loader ts-node/esm src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/storage": "^7.19.0",
+    "@google/genai": "^1.45.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@notionhq/client": "^2.2.15",
+    "@notionhq/notion-mcp-server": "^2.2.1",
+    "axios": "^1.13.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "notion-to-md": "^3.1.9",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/axios": "^0.9.36",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/uuid": "^10.0.0",
+    "nodemon": "^3.1.14",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
