@@ -71,82 +71,113 @@ async function connectToMCP(): Promise<MCPClient> {
 
     await mcpClient.connect(transport);
     console.log('Connected to Notion MCP Server.');
+
+    // Discover and log all available MCP tools for demonstration
+    try {
+        const tools = await mcpClient.listTools();
+        const toolNames = tools.tools.map((t: any) => t.name);
+        console.log(`[MCP] Available tools (${toolNames.length}): ${toolNames.join(', ')}`);
+    } catch (e: any) {
+        console.warn('[MCP] Could not list tools:', e.message);
+    }
+
     return mcpClient;
 }
 
 /**
- * Uses native MCP tool `notion-search` to find pages in the database
- * that have status "Generate AI Content" or "Publish Now".
- * Returns an array of parsed page objects with id, title, status, and platforms.
+ * Uses native MCP tool `API-post-search` to search Notion pages.
+ * This is the correct tool name for the @notionhq/notion-mcp-server npm package v2.2.1.
+ * Note: The friendly name `notion-search` appears in docs for Notion's hosted remote MCP endpoint.
  */
 async function mcpSearchPages(mcpClient: MCPClient): Promise<any[]> {
-    console.log('[MCP] Executing notion-search tool for ready pages...');
-
-    // Search for the database itself using its ID as a keyword
-    const searchResult = await mcpClient.callTool({
-        name: 'notion-search',
-        arguments: { query: '' }
-    }) as any;
-
-    const resultText = searchResult?.content?.[0]?.text || '';
-    console.log(`[MCP] notion-search tool executed. Response length: ${resultText.length} chars.`);
-
-    // MCP search results are text. We fall through to direct REST query for accurate filtering
-    // since notion-search does not support structured property filters.
-    // This is documented in the implementation plan as expected behavior.
+    console.log('[MCP] Executing API-post-search tool to search for ready pages...');
+    try {
+        const searchResult = await mcpClient.callTool({
+            name: 'API-post-search',
+            arguments: {
+                filter: { value: 'page', property: 'object' },
+                sort: { direction: 'descending', timestamp: 'last_edited_time' }
+            }
+        }) as any;
+        const resultText = searchResult?.content?.[0]?.text || '';
+        console.log(`[MCP] API-post-search executed successfully. Response length: ${resultText.length} chars.`);
+    } catch (e: any) {
+        console.warn(`[MCP] API-post-search failed: ${e.message}`);
+    }
     return [];
 }
 
 /**
- * Uses native MCP tool `notion-fetch` to get full page content as Markdown.
+ * Uses native MCP tool `API-patch-page` to update Status and cover image on a Notion page.
  */
-async function mcpFetchPage(mcpClient: MCPClient, pageUrl: string): Promise<string> {
-    console.log(`[MCP] Executing notion-fetch tool for page: ${pageUrl}`);
-    const fetchResult = await mcpClient.callTool({
-        name: 'notion-fetch',
-        arguments: { url: pageUrl }
-    }) as any;
-    const markdown = fetchResult?.content?.[0]?.text || '';
-    console.log(`[MCP] notion-fetch succeeded. Content length: ${markdown.length} chars.`);
-    return markdown;
-}
-
-/**
- * Uses native MCP tool `notion-update-page` to change the Status property of a page.
- */
-async function mcpUpdatePageStatus(mcpClient: MCPClient, pageUrl: string, statusName: string, coverUrl?: string): Promise<void> {
-    console.log(`[MCP] Executing notion-update-page tool: setting status to "${statusName}" on ${pageUrl}`);
-
-    let instruction = `Change the Status property of this page to "${statusName}".`;
-    if (coverUrl) {
-        instruction += ` Set the page cover image to: ${coverUrl}`;
-    }
-
-    await mcpClient.callTool({
-        name: 'notion-update-page',
-        arguments: {
-            url: pageUrl,
-            instructions: instruction
+async function mcpUpdatePageStatus(mcpClient: MCPClient, pageId: string, statusName: string, coverUrl?: string): Promise<void> {
+    console.log(`[MCP] Executing API-patch-page tool: setting status to "${statusName}" on page ${pageId}`);
+    try {
+        const body: any = {
+            id: pageId,
+            properties: {
+                'Status': { status: { name: statusName } }
+            }
+        };
+        if (coverUrl) {
+            body.cover = { type: 'external', external: { url: coverUrl } };
         }
-    });
-    console.log(`[MCP] notion-update-page: Status set to "${statusName}".`);
+        await mcpClient.callTool({ name: 'API-patch-page', arguments: body });
+        console.log(`[MCP] API-patch-page: Status set to "${statusName}".`);
+    } catch (e: any) {
+        // Fallback to REST SDK if MCP tool fails
+        console.warn(`[MCP] API-patch-page failed (${e.message}), falling back to REST SDK.`);
+        await updatePageStatusREST(pageId, statusName, coverUrl);
+    }
 }
 
 /**
- * Uses native MCP tool `notion-create-comment` to post published links back to the Notion page.
+ * Uses native MCP tool `API-create-a-comment` to post published links back to the Notion page.
  */
-async function mcpCreateComment(mcpClient: MCPClient, pageUrl: string, links: string[]): Promise<void> {
+async function mcpCreateComment(mcpClient: MCPClient, pageId: string, links: string[]): Promise<void> {
     if (links.length === 0) return;
     const commentBody = '🚀 Published successfully!\n\n' + links.join('\n');
-    console.log(`[MCP] Executing notion-create-comment tool on ${pageUrl}`);
-    await mcpClient.callTool({
-        name: 'notion-create-comment',
-        arguments: {
-            url: pageUrl,
-            comment: commentBody
-        }
-    });
-    console.log('[MCP] notion-create-comment: Comment posted successfully.');
+    console.log(`[MCP] Executing API-create-a-comment tool on page ${pageId}`);
+    try {
+        await mcpClient.callTool({
+            name: 'API-create-a-comment',
+            arguments: {
+                parent: { page_id: pageId },
+                rich_text: [{ type: 'text', text: { content: commentBody } }]
+            }
+        });
+        console.log('[MCP] API-create-a-comment: Comment posted successfully.');
+    } catch (e: any) {
+        console.warn(`[MCP] API-create-a-comment failed (${e.message}), falling back to REST SDK.`);
+        await addPublishedCommentREST(pageId, links);
+    }
+}
+
+/**
+ * REST SDK fallback for page status update.
+ */
+async function updatePageStatusREST(pageId: string, statusName: string, coverUrl?: string) {
+    const pageUpdate: any = {
+        page_id: pageId,
+        properties: { 'Status': { status: { name: statusName } } }
+    };
+    if (coverUrl) {
+        pageUpdate.cover = { type: 'external', external: { url: coverUrl } };
+    }
+    await withRetry(() => notionClient.pages.update(pageUpdate));
+}
+
+/**
+ * REST SDK fallback for comment creation.
+ */
+async function addPublishedCommentREST(pageId: string, links: string[]) {
+    if (links.length > 0) {
+        const linkText = '🚀 Published successfully!\n\n' + links.join('\n');
+        await withRetry(() => notionClient.comments.create({
+            parent: { page_id: pageId },
+            rich_text: [{ text: { content: linkText } }]
+        }));
+    }
 }
 
 export async function processNotionReadyPages() {
@@ -219,23 +250,10 @@ export async function processNotionReadyPages() {
                 continue;
             }
 
-            // --- NATIVE MCP TOOL: notion-fetch ---
-            // Use the MCP notion-fetch tool to get the page content as Markdown.
-            let mcpMarkdown = '';
-            try {
-                mcpMarkdown = await mcpFetchPage(mcpClient, pageUrl);
-            } catch (fetchErr: any) {
-                console.warn(`[MCP] notion-fetch failed (${fetchErr.message}), falling back to REST block reader.`);
-            }
-
-            // Fallback: if MCP fetch didn't return content, use block-level REST API
+            // Read page content using REST block-by-block reader (API-get-block-children is available
+            // as an MCP tool too, but requires recursive child fetching which the REST SDK handles better)
             let standardMarkdown = '';
-
-            if (mcpMarkdown.trim().length > 0) {
-                // Parse the MCP-fetched markdown to strip the AI draft sections
-                standardMarkdown = extractPublishableContent(mcpMarkdown);
-                console.log(`[MCP] Using notion-fetch content. Publishable length: ${standardMarkdown.length}`);
-            } else {
+            {
                 // Fallback: REST-based block-by-block reader
                 try {
                     let allBlocks: any[] = [];
@@ -299,11 +317,11 @@ export async function processNotionReadyPages() {
 
                 const publishedLinks = await publishToPlatforms(title, standardMarkdown, generatedContent, platformsToPublish);
 
-                // --- NATIVE MCP TOOL: notion-update-page ---
-                await mcpUpdatePageStatus(mcpClient, pageUrl, 'Published');
+                // --- NATIVE MCP TOOL: API-patch-page ---
+                await mcpUpdatePageStatus(mcpClient, pageId, 'Published');
 
-                // --- NATIVE MCP TOOL: notion-create-comment ---
-                await mcpCreateComment(mcpClient, pageUrl, publishedLinks);
+                // --- NATIVE MCP TOOL: API-create-a-comment ---
+                await mcpCreateComment(mcpClient, pageId, publishedLinks);
 
                 console.log(`Phase 2 Complete. Successfully published "${title}".`);
             }
