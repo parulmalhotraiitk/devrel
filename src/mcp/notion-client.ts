@@ -293,9 +293,9 @@ export async function processNotionReadyPages() {
                 // Write AI content back to Notion as new blocks (requires structured block API)
                 await appendAIGeneratedBlocks(pageId, generatedContent);
 
-                // --- NATIVE MCP TOOL: notion-update-page ---
+                // --- NATIVE MCP TOOL: API-patch-page ---
                 // Update the page status using the MCP tool
-                await mcpUpdatePageStatus(mcpClient, pageUrl, 'Pending Review', generatedContent.coverImageUrl);
+                await mcpUpdatePageStatus(mcpClient, pageId, 'Pending Review', generatedContent.coverImageUrl);
                 console.log(`Phase 1 Complete. "${title}" is now Pending Review.`);
             }
             else if (currentStatus === 'Publish Now') {
