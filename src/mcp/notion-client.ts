@@ -58,7 +58,7 @@ async function connectToMCP(): Promise<MCPClient> {
         args: ['node_modules/@notionhq/notion-mcp-server/bin/cli.mjs'],
         env: {
             ...process.env,
-            NOTION_API_TOKEN: NOTION_TOKEN as string
+            NOTION_TOKEN: NOTION_TOKEN as string
         }
     });
 
