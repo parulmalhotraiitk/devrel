@@ -99,6 +99,8 @@ async function mcpSearchPages(mcpClient: MCPClient): Promise<any[]> {
                 sort: { direction: 'descending', timestamp: 'last_edited_time' }
             }
         }) as any;
+        if (searchResult?.isError) throw new Error(searchResult?.content?.[0]?.text || 'Unknown MCP Error');
+
         const resultText = searchResult?.content?.[0]?.text || '';
         console.log(`[MCP] API-post-search executed successfully. Response length: ${resultText.length} chars.`);
     } catch (e: any) {
@@ -114,7 +116,7 @@ async function mcpUpdatePageStatus(mcpClient: MCPClient, pageId: string, statusN
     console.log(`[MCP] Executing API-patch-page tool: setting status to "${statusName}" on page ${pageId}`);
     try {
         const body: any = {
-            id: pageId,
+            page_id: pageId,
             properties: {
                 'Status': { status: { name: statusName } }
             }
@@ -122,7 +124,10 @@ async function mcpUpdatePageStatus(mcpClient: MCPClient, pageId: string, statusN
         if (coverUrl) {
             body.cover = { type: 'external', external: { url: coverUrl } };
         }
-        await mcpClient.callTool({ name: 'API-patch-page', arguments: body });
+        
+        const result = await mcpClient.callTool({ name: 'API-patch-page', arguments: body }) as any;
+        if (result?.isError) throw new Error(result?.content?.[0]?.text || 'Unknown MCP Error');
+        
         console.log(`[MCP] API-patch-page: Status set to "${statusName}".`);
     } catch (e: any) {
         // Fallback to REST SDK if MCP tool fails
@@ -139,13 +144,15 @@ async function mcpCreateComment(mcpClient: MCPClient, pageId: string, links: str
     const commentBody = '🚀 Published successfully!\n\n' + links.join('\n');
     console.log(`[MCP] Executing API-create-a-comment tool on page ${pageId}`);
     try {
-        await mcpClient.callTool({
+        const result = await mcpClient.callTool({
             name: 'API-create-a-comment',
             arguments: {
                 parent: { page_id: pageId },
                 rich_text: [{ type: 'text', text: { content: commentBody } }]
             }
-        });
+        }) as any;
+        if (result?.isError) throw new Error(result?.content?.[0]?.text || 'Unknown MCP Error');
+        
         console.log('[MCP] API-create-a-comment: Comment posted successfully.');
     } catch (e: any) {
         console.warn(`[MCP] API-create-a-comment failed (${e.message}), falling back to REST SDK.`);
@@ -253,6 +260,7 @@ export async function processNotionReadyPages() {
             // Read page content using REST block-by-block reader (API-get-block-children is available
             // as an MCP tool too, but requires recursive child fetching which the REST SDK handles better)
             let standardMarkdown = '';
+            let hasAIAttached = false;
             {
                 // Fallback: REST-based block-by-block reader
                 try {
@@ -270,7 +278,10 @@ export async function processNotionReadyPages() {
                     }
 
                     console.log(`Debug: Got ${allBlocks.length} total blocks from page.`);
-                    standardMarkdown = extractMarkdownFromBlocks(allBlocks);
+                    
+                    const extracted = extractMarkdownFromBlocks(allBlocks);
+                    standardMarkdown = extracted.content;
+                    hasAIAttached = extracted.hasAI;
                 } catch (blockError: any) {
                     console.warn(`Could not fetch page blocks: ${blockError.message}`);
                 }
@@ -287,16 +298,21 @@ export async function processNotionReadyPages() {
             console.log(`Debug: Current Status is "${currentStatus}"`);
 
             if (currentStatus === 'Generate AI Content') {
-                console.log(`Phase 1: Generating AI Content for "${title}"...`);
-                const generatedContent = await generateGeminiContent(standardMarkdown, platformsToPublish);
+                if (hasAIAttached) {
+                    console.log(`Phase 1 Skip: AI content already exists for "${title}". Syncing status to 'Pending Review'.`);
+                    await mcpUpdatePageStatus(mcpClient, pageId, 'Pending Review');
+                } else {
+                    console.log(`Phase 1: Generating AI Content for "${title}"...`);
+                    const generatedContent = await generateGeminiContent(standardMarkdown, platformsToPublish);
 
-                // Write AI content back to Notion as new blocks (requires structured block API)
-                await appendAIGeneratedBlocks(pageId, generatedContent);
+                    // Write AI content back to Notion as new blocks (requires structured block API)
+                    await appendAIGeneratedBlocks(pageId, generatedContent);
 
-                // --- NATIVE MCP TOOL: API-patch-page ---
-                // Update the page status using the MCP tool
-                await mcpUpdatePageStatus(mcpClient, pageId, 'Pending Review', generatedContent.coverImageUrl);
-                console.log(`Phase 1 Complete. "${title}" is now Pending Review.`);
+                    // --- NATIVE MCP TOOL: API-patch-page ---
+                    // Update the page status using the MCP tool
+                    await mcpUpdatePageStatus(mcpClient, pageId, 'Pending Review', generatedContent.coverImageUrl);
+                    console.log(`Phase 1 Complete. "${title}" is now Pending Review.`);
+                }
             }
             else if (currentStatus === 'Publish Now') {
                 console.log(`Phase 2: Publishing "${title}" to platforms...`);
@@ -348,7 +364,7 @@ export async function processNotionReadyPages() {
  * Strips out AI draft sections (Twitter, LinkedIn) and the old bullet notes
  * if a "📝 AI Expanded Article" section exists.
  */
-function extractPublishableContent(fullMarkdown: string): string {
+function extractPublishableContent(fullMarkdown: string): { content: string, hasAI: boolean } {
     const twitterIdx = fullMarkdown.indexOf('🐦 Twitter / X Thread');
     const linkedinIdx = fullMarkdown.indexOf('💼 LinkedIn Post');
     
@@ -360,18 +376,20 @@ function extractPublishableContent(fullMarkdown: string): string {
 
     // If an AI Expanded Article section exists, use only that
     const expandedIdx = content.indexOf('📝 AI Expanded Article');
-    if (expandedIdx !== -1) {
+    const hasAI = expandedIdx !== -1;
+    
+    if (hasAI) {
         content = content.substring(expandedIdx + '📝 AI Expanded Article'.length).trim();
     }
 
-    return content;
+    return { content, hasAI };
 }
 
 /**
  * Extracts publishable Markdown content from raw Notion block objects.
  * Used as a fallback when the MCP notion-fetch tool fails.
  */
-function extractMarkdownFromBlocks(allBlocks: any[]): string {
+function extractMarkdownFromBlocks(allBlocks: any[]): { content: string, hasAI: boolean } {
     let markdown = '';
 
     const hasExpandedArticle = allBlocks.some(b => {
@@ -407,7 +425,7 @@ function extractMarkdownFromBlocks(allBlocks: any[]): string {
         }
     }
 
-    return markdown;
+    return { content: markdown, hasAI: hasExpandedArticle };
 }
 
 /**
