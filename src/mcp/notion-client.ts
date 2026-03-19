@@ -381,11 +381,6 @@ async function appendAIGeneratedBlocks(pageId: string, generated: any) {
             type: 'heading_3',
             heading_3: { rich_text: [{ type: 'text', text: { content: '📝 AI Expanded Article' } }] }
         });
-        blocks.push({
-            object: 'block',
-            type: 'paragraph',
-            paragraph: { rich_text: [{ type: 'text', text: { content: "I expanded your short notes into a full article draft. If you like it, copy-paste it over your original text above!" } }] }
-        });
         
         // Split long articles into multiple paragraph chunks because Notion has a 2000 character limit per rich_text item
         const chunks = generated.expandedArticle.match(/.{1,1900}/g) || [];
@@ -405,11 +400,14 @@ async function appendAIGeneratedBlocks(pageId: string, generated: any) {
             heading_3: { rich_text: [{ type: 'text', text: { content: '🐦 Twitter / X Thread' } }] }
 
         });
-        blocks.push({
-            object: 'block',
-            type: 'paragraph',
-            paragraph: { rich_text: [{ type: 'text', text: { content: generated.twitterThread } }] }
-        });
+        const twitterChunks = generated.twitterThread.match(/.{1,1900}/gs) || [];
+        for (const chunk of twitterChunks) {
+            blocks.push({
+                object: 'block',
+                type: 'paragraph',
+                paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] }
+            });
+        }
     }
 
     if (generated.linkedInPost) {
@@ -418,11 +416,15 @@ async function appendAIGeneratedBlocks(pageId: string, generated: any) {
             type: 'heading_3',
             heading_3: { rich_text: [{ type: 'text', text: { content: '💼 LinkedIn Post' } }] }
         });
-        blocks.push({
-            object: 'block',
-            type: 'paragraph',
-            paragraph: { rich_text: [{ type: 'text', text: { content: generated.linkedInPost } }] }
-        });
+        
+        const linkedinChunks = generated.linkedInPost.match(/.{1,1900}/gs) || [];
+        for (const chunk of linkedinChunks) {
+            blocks.push({
+                object: 'block',
+                type: 'paragraph',
+                paragraph: { rich_text: [{ type: 'text', text: { content: chunk } }] }
+            });
+        }
     }
 
     if (blocks.length > 2) { // Only append if we actually generated content
