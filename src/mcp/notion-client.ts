@@ -65,6 +65,22 @@ async function connectToMCP() {
 
     await mcpClient.connect(transport);
     console.log('Connected to Notion MCP Server.');
+
+    // Hackathon Flex: Actively execute an MCP Tool!
+    try {
+        console.log("Executing native MCP Tool 'search' to validate full protocol integration...");
+        const searchResult = await mcpClient.callTool({
+            name: "search",
+            arguments: { query: "DevRel" } 
+        });
+        
+        // Log the first few characters of the result to prove it worked without flooding logs
+        const resultString = JSON.stringify(searchResult);
+        console.log(`MCP search tool executed successfully! Result slice: ${resultString.substring(0, 150)}...`);
+    } catch (e: any) {
+        console.warn("MCP Tool test execution skipped/failed: ", e.message);
+    }
+
     return mcpClient;
 }
 
